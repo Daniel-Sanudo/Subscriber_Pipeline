@@ -12,14 +12,14 @@ logging.basicConfig(filename="cleanse_db.log",
 logger = logging.getLogger(__name__)
 
 
-def clean_students(spark, logger):
+def clean_students(spark, logger, cur):
+
     # Create pyspark dataframe object using the queried information
-    student_df = spark.read \
-                .format('jdbc') \
-                .option('url','jdbc:sqlite:cademycode.db') \
-                .option('query', 'SELECT * FROM cademycode_students') \
-                .option('inferSchema', True) \
-                .load()
+    # using sqlite 3 since there is a pyspark configuration error that I cant fix 
+    student_columns = ['uuid', 'name', 'dob', 'sex', 'contact_info', 'job_id', 'num_course_taken', 'current_career_path_id', 'time_spent_hrs']
+
+    # Create pyspark dataframe object using the queried information
+    student_df = spark.createDataFrame(cur.execute('''SELECT * FROM cademycode_students''').fetchall(),student_columns)
 
     # Show the dtypes which were assigned
     logger.debug(f'Read the following columns and dtypes: {student_df.dtypes}')
@@ -28,7 +28,7 @@ def clean_students(spark, logger):
     # uuid to use in the join
     # mailing address which is extracted from the dictionary
     # email address which is extracted from the dictionary
-    
+
     student_address_df = student_df.select(
                     student_df.uuid.alias('student_uuid'),
                     f.get_json_object(student_df.contact_info.cast(StringType()), '$.mailing_address').alias("mailing_address"),
@@ -83,17 +83,36 @@ def clean_students(spark, logger):
                     IntegerType(), IntegerType(), IntegerType(),
                     FloatType()]
 
-    for key,value in zip(sorted_columns,column_dtypes):
-        clean_student_df = clean_student_df.withColumn(key, clean_student_df[key].cast(value))
+    for name,dtype in zip(sorted_columns,column_dtypes):
+        clean_student_df = clean_student_df.withColumn(name, clean_student_df[name].cast(dtype))
     clean_student_df = clean_student_df.select(*sorted_columns)
-    logger.debug(f'Final student_df results: {clean_student_df.columns}')
-    logger.debug(f'Final student_df results: {clean_student_df.show(10)}')
+    logger.debug(f'Final student_df results: {clean_student_df.take(5)}')
 
-def clean_courses():
-    pass
+    return clean_student_df, student_df_missing_info
 
-def clean_jobs():
-    pass 
+def clean_courses(spark, logger, cur):
+    # Create list with column names
+    course_columns = ['career_path_id', 'career_path_name', 'hours_to_complete']
+
+    # Create pyspark dataframe using the data from the query
+    course_df = spark.createDataFrame(cur.execute('''SELECT * FROM cademycode_courses''').fetchall(),course_columns)
+    
+    logger.debug(f'Final course_df results: {course_df.take(5)}')
+
+    return course_df
+
+def clean_jobs(spark, logger, cur):
+    # Create list with column names
+    job_columns = ['job_id', 'job_category', 'avg_salary']
+
+    # Create PySpark dataframe from query
+    job_df = spark.createDataFrame(cur.execute('''SELECT * FROM cademycode_student_jobs''').fetchall(),job_columns) 
+    job_df = job_df.dropDuplicates()
+
+    logger.debug(f'Final course_df results: {job_df.take(5)}')
+    
+
+    return job_df
 
 def main():
     # Create spark session
@@ -107,8 +126,16 @@ def main():
         "spark.driver.extraClassPath",
         "{}/sqlite-jdbc-3.34.0.jar".format(os.getcwd())) \
         .getOrCreate()
-        
-    clean_students(spark,logger)
+    
+    spark.sparkContext.setLogLevel('OFF')
+
+    # Create sqlite connection and cursor
+    con = sqlite3.connect(os.path.join('cademycode.db'))
+    cur = con.cursor()
+
+    student_df, missing_info_df = clean_students(spark,logger,cur)
+    courses_df = clean_courses(spark,logger,cur)
+    jobs_df = clean_jobs(spark,logger,cur)
 
 if __name__ == "__main__":
     main()
