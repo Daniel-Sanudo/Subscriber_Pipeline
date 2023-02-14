@@ -137,5 +137,7 @@ def main():
     courses_df = clean_courses(spark,logger,cur)
     jobs_df = clean_jobs(spark,logger,cur)
 
+    con.close()
+
 if __name__ == "__main__":
     main()
