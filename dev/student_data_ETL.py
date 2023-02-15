@@ -3,7 +3,7 @@ import sqlite3
 import os
 import pyspark.sql.functions as f
 from pyspark.sql import SparkSession
-from pyspark.sql.types import StructType, StructField, IntegerType, FloatType, DateType, StringType
+from pyspark.sql.types import IntegerType, FloatType, DateType, StringType
 
 logging.basicConfig(filename="cleanse_db.log",
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -114,6 +114,19 @@ def clean_jobs(spark, logger, cur):
 
     return job_df
 
+def test_job_id_match(student_df,job_df):
+    student_df_job_ids = student_df.select('job_id').dropDuplicates()
+    job_df_job_ids = job_df.select('job_id').dropDuplicates()
+    try:
+        assert student_df_job_ids.subtract(job_df_job_ids).count() == 0, "Job IDs between student and job df do not match"
+    except AssertionError as ae:
+        logger.exception(ae)
+        logger.exception(f'Mismatch with the following job ids: {student_df_job_ids.subtract(job_df_job_ids)}')
+        raise ae
+    else:
+        logger.debug('All ids are present')
+
+
 def main():
     # Create spark session
     spark = SparkSession.builder \
@@ -134,9 +147,12 @@ def main():
     cur = con.cursor()
 
     student_df, missing_info_df = clean_students(spark,logger,cur)
-    courses_df = clean_courses(spark,logger,cur)
+    # courses_df = clean_courses(spark,logger,cur)
     jobs_df = clean_jobs(spark,logger,cur)
 
+    test_job_id_match(student_df, jobs_df)
+
+    spark.stop()
     con.close()
 
 if __name__ == "__main__":
