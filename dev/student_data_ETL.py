@@ -87,6 +87,7 @@ def clean_students(spark, logger, cur):
         clean_student_df = clean_student_df.withColumn(name, clean_student_df[name].cast(dtype))
     clean_student_df = clean_student_df.select(*sorted_columns)
     logger.debug(f'Final student_df results: {clean_student_df.take(5)}')
+    logger.debug(f'Final student_df dtypes: {clean_student_df.dtypes}')
 
     return clean_student_df, student_df_missing_info
 
@@ -118,14 +119,113 @@ def test_job_id_match(student_df,job_df):
     student_df_job_ids = student_df.select('job_id').dropDuplicates()
     job_df_job_ids = job_df.select('job_id').dropDuplicates()
     try:
-        assert student_df_job_ids.subtract(job_df_job_ids).count() == 0, "Job IDs between student and job df do not match"
+        test_result = student_df_job_ids.subtract(job_df_job_ids)
+        assert test_result.count() == 0, "Job IDs between student and job df do not match"
     except AssertionError as ae:
         logger.exception(ae)
-        logger.exception(f'Mismatch with the following job ids: {student_df_job_ids.subtract(job_df_job_ids)}')
+        logger.exception(f'Mismatch with the following job ids: {test_result}')
         raise ae
     else:
-        logger.debug('All ids are present')
+        logger.debug('All job ids are present')
 
+def test_course_id_match(student_df, course_df):
+    student_df_course_ids = student_df.select('current_career_path_id').dropDuplicates()
+    course_df_course_ids = course_df.select('career_path_id').dropDuplicates()
+    try:
+        test_result = student_df_course_ids.subtract(course_df_course_ids) 
+        assert test_result.count() == 0, "Course IDs between student and course df do not match"
+    except AssertionError as ae:
+        logger.exception(ae)
+        logger.exception(f'Mismatch with the following job ids: {test_result}')
+        raise ae
+    else:
+        logger.debug('All career ids are present')
+
+def test_no_course_nulls(course_df):
+    for col in course_df.columns:
+        try: 
+            nulls = course_df.filter(course_df[col].isNull()).count()
+            assert nulls == 0, 'Null values found in course_df'
+        except AssertionError as ae:
+            logger.exception(ae)
+            logger.exception(f'Null values found in {col} from course_df')
+            raise ae
+        else:
+            logger.debug(f'No nulls in {col}')
+
+def test_no_job_nulls(job_df):
+    for col in job_df.columns:
+        try: 
+            nulls = job_df.filter(job_df[col].isNull()).count()
+            assert nulls == 0, 'Null values found in job_df'
+        except AssertionError as ae:
+            logger.exception(ae)
+            logger.exception(f'Null values found in {col} from job_df')
+            raise ae
+        else:
+            logger.debug(f'No nulls in {col}')
+
+def test_no_student_nulls(student_df):
+    for col in student_df.columns:
+        try: 
+            nulls = student_df.filter(student_df[col].isNull()).count()
+            assert nulls == 0, 'Null values found in student_df'
+        except AssertionError as ae:
+            logger.exception(ae)
+            logger.exception(f'Null values found in {col} from student_df')
+            raise ae
+        else:
+            logger.debug(f'No nulls in {col}')
+
+def test_no_negative_values(student_df):
+    min_course_count = student_df.agg({'num_course_taken':'min'}).collect()[0][0]
+    logger.debug(f'Comparing {min_course_count} as min_course_count')
+    min_hours_spent = student_df.agg({'time_spent_hrs':'min'}).collect()[0][0]
+    logger.debug(f'Comparing {min_hours_spent} as min_hours_spent')
+    try:
+        assert min_course_count >= 0, 'Value below 0 found in num_course_taken'
+    except AssertionError as ae:
+        logger.exception(ae)
+        logger.exception(f'Negative value found in student_df.num_course_taken')
+    try:
+        assert min_hours_spent >= 0, 'Value below 0 found in time_spent_hrs'
+    except AssertionError as ae:
+        logger.exception(ae)
+        logger.exception(f'Negative value found in student_df.time_spent_hrs')
+        raise ae
+
+def test_student_df_dtypes(student_df):
+    current_dtype_list = student_df.dtypes
+    student_columns = ['uuid', 'name', 'dob', 
+                    'birth_year', 'sex', 'email_address',
+                    'street', 'city', 'state', 'zipcode',
+                    'job_id', 'num_course_taken', 'current_career_path_id',
+                    'time_spent_hrs']
+    student_dtypes = ['int', 'string', 'date',
+                    'int', 'string', 'string',
+                    'string', 'string', 'string', 'int',
+                    'int', 'int', 'int',
+                    'float']
+    correct_dtype_dict = {key:value for (key,value) in zip(student_columns,student_dtypes)}
+
+    for dtype in current_dtype_list:
+        col_name = dtype[0]
+        col_dtype = dtype[1]
+        try:
+            assert col_dtype == correct_dtype_dict[col_name], f'dtype mismatch in column {col_name}'
+        except AssertionError as ae:
+            logger.exception(ae)
+            logger.exception(f'{col_name} should be {correct_dtype_dict[col_name]} but is {col_dtype}')
+            raise ae
+
+def test_all(student_df, course_df, job_df):
+    test_no_course_nulls(course_df)
+    test_no_job_nulls(job_df)
+    test_no_student_nulls(student_df)
+    test_no_negative_values(student_df)
+    test_student_df_dtypes(student_df)
+    test_course_id_match(student_df, course_df)
+    test_job_id_match(student_df, job_df)
 
 def main():
     # Create spark session
@@ -147,13 +247,16 @@ def main():
     cur = con.cursor()
 
     student_df, missing_info_df = clean_students(spark,logger,cur)
-    # courses_df = clean_courses(spark,logger,cur)
+    courses_df = clean_courses(spark,logger,cur)
     jobs_df = clean_jobs(spark,logger,cur)
+    con.close()
 
-    test_job_id_match(student_df, jobs_df)
+    test_all(student_df=student_df,
+            course_df=courses_df,
+            job_df=jobs_df) 
 
     spark.stop()
-    con.close()
+    
 
 if __name__ == "__main__":
     main()
