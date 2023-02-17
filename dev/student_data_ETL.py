@@ -218,6 +218,20 @@ def test_student_df_dtypes(student_df):
             logger.exception(f'{col_name} should be {correct_dtype_dict[col_name]} but is {col_dtype}')
             raise ae
 
+def test_db_existence():
+    con = sqlite3.connect(os.path.join('cademycode_updated.db'))
+    cur = con.cursor()
+    existing_tables = cur.execute('''SELECT name FROM sqlite_master''').fetchall()
+    con.close()
+    target_tables = [('student_information',), ('student_details',), ('student_studies',), ('student_contact',), ('course_info',), ('job_info',), ('missing_data_entries',)]
+    for table in existing_tables:
+        try:
+            assert table in target_tables, f'The table {table} was not found in the target database'
+        except AssertionError as ae:
+            logger.exception(ae)
+            logger.exception(f'Error occured while confirming the existence of the target tables')
+            return ae
+
 def test_all(student_df, course_df, job_df):
     test_no_course_nulls(course_df)
     test_no_job_nulls(job_df)
@@ -226,6 +240,49 @@ def test_all(student_df, course_df, job_df):
     test_student_df_dtypes(student_df)
     test_course_id_match(student_df, course_df)
     test_job_id_match(student_df, job_df)
+
+
+def load_new_data(student_df, missing_info_df, course_df, job_df):
+    try:
+        test_db_existence()
+    except AssertionError as ae:
+        raise ae
+    else: 
+        mode = 'overwrite'
+        jdbc_url = 'jdbc:sqlite:cademycode_updated.db'
+        course_columns = ['career_path_id', 'career_path_name', 'hours_to_complete']
+        job_columns = ['job_id', 'job_category', 'avg_salary']
+        sorted_columns = ['uuid', 'name', 'dob', 
+                    'birth_year', 'sex', 'email_address',
+                    'street', 'city', 'state', 'zipcode',
+                    'job_id', 'num_course_taken', 'current_career_path_id',
+                    'time_spent_hrs']
+
+        student_df = student_df.withColumn('loaded_on_date',f.current_timestamp())
+
+        student_df.select(*['uuid', 'name', 'job_id', 'current_career_path_id', 'loaded_on_date']) \
+                        .write.jdbc(url=jdbc_url, mode=mode, table='student_information')
+        
+        student_df.select(*['uuid','dob','birth_year','sex'])\
+                    .write.jdbc(url=jdbc_url, mode=mode, table='student_details')
+
+        student_df.select(*['uuid','num_course_taken','time_spent_hrs'])\
+                    .write.jdbc(url=jdbc_url, mode=mode, table='student_studies')
+
+        student_df.select(*['uuid','email_address','street','city','state','zipcode'])\
+                    .write.jdbc(url=jdbc_url, mode=mode, table='student_contact')
+
+        course_df= course_df.repartition(1)
+
+        course_df.select(*course_columns)\
+                    .write.jdbc(url=jdbc_url, mode=mode, table='course_info')
+
+        job_df.select(*job_columns)\
+                    .write.jdbc(url=jdbc_url, mode=mode, table='job_info')
+
+        missing_info_df.select(*sorted_columns)\
+                        .withColumn('loaded_on_date',f.current_timestamp()) \
+                        .write.jdbc(url=jdbc_url, mode=mode, table='missing_data_entries')
 
 def main():
     # Create spark session
@@ -254,6 +311,8 @@ def main():
     test_all(student_df=student_df,
             course_df=courses_df,
             job_df=jobs_df) 
+
+    load_new_data(student_df, missing_info_df, courses_df, jobs_df)
 
     spark.stop()
     
